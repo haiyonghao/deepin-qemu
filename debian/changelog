@@ -1,3 +1,10 @@
+qemu (1:8.2.0+ds-1deepin18) unstable; urgency=medium
+
+  * Apply VMX controls compat patch to solve 0x48b msr set
+    error when boot guest.
+
+ -- Ewan Hai <ewanhai-oc@zhaoxin.com>  Sun, 09 Mar 2026 12:00:00 +0800
+
 qemu (1:8.2.0+ds-1deepin17) unstable; urgency=medium
 
   * Add support for Hygon Dharma and Chengdu CPU models.
