@@ -1,0 +1,190 @@
+From e12bea8ace29b4df17c2227bccd74fe360b67880 Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Mon, 9 Jan 2023 10:55:32 +0000
+Subject: [PATCH 09/29] target/arm/kvm-rme: Initialize vCPU
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/0808c64a827150c4a8576e52101386df9c08c136
+
+The target code calls kvm_arm_vcpu_init() to mark the vCPU as part of a
+Realm. For a Realm vCPU, only x0-x7 can be set at runtime. Before boot,
+the PC can also be set, and is ignored at runtime. KVM also accepts a
+few system register changes during initial configuration, as returned by
+KVM_GET_REG_LIST.
+
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Conflicts:
+      target/arm/kvm.c
+      target/arm/kvm_arm.h
+Signed-off-by: frankyj915 <yangjieyj.yang@huawei.com>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ target/arm/cpu.h     |  3 +++
+ target/arm/kvm-rme.c | 11 +++++++++
+ target/arm/kvm64.c   | 53 ++++++++++++++++++++++++++++++++++++++++++++
+ target/arm/kvm_arm.h | 15 +++++++++++++
+ 4 files changed, 82 insertions(+)
+
+diff --git a/target/arm/cpu.h b/target/arm/cpu.h
+index a0282e0d..ed682b17 100644
+--- a/target/arm/cpu.h
++++ b/target/arm/cpu.h
+@@ -973,6 +973,9 @@ struct ArchCPU {
+     OnOffAuto kvm_steal_time;
+ #endif /* CONFIG_KVM */
+ 
++    /* Realm Management Extension */
++    bool kvm_rme;
++
+     /* Uniprocessor system with MP extensions */
+     bool mp_is_up;
+ 
+diff --git a/target/arm/kvm-rme.c b/target/arm/kvm-rme.c
+index 3c6fecc7..b0805520 100644
+--- a/target/arm/kvm-rme.c
++++ b/target/arm/kvm-rme.c
+@@ -136,6 +136,17 @@ int kvm_arm_rme_init(MachineState *ms)
+     return 0;
+ }
+ 
++int kvm_arm_rme_vcpu_init(CPUState *cs)
++{
++    ARMCPU *cpu = ARM_CPU(cs);
++
++    if (rme_guest) {
++        cpu->kvm_rme = true;
++        cpu->kvm_init_features[0] |= (1 << KVM_ARM_VCPU_REC);
++    }
++    return 0;
++}
++
+ int kvm_arm_rme_vm_type(MachineState *ms)
+ {
+     if (rme_guest) {
+diff --git a/target/arm/kvm64.c b/target/arm/kvm64.c
+index 0e39d6b5..b5d5f47f 100644
+--- a/target/arm/kvm64.c
++++ b/target/arm/kvm64.c
+@@ -593,6 +593,11 @@ int kvm_arch_init_vcpu(CPUState *cs)
+                                       1 << KVM_ARM_VCPU_PTRAUTH_GENERIC);
+     }
+ 
++    ret = kvm_arm_rme_vcpu_init(cs);
++    if (ret) {
++        return ret;
++    }
++
+     /* Do KVM_ARM_VCPU_INIT ioctl */
+     ret = kvm_arm_vcpu_init(cs);
+     if (ret) {
+@@ -782,6 +787,29 @@ static int kvm_arch_put_sve(CPUState *cs)
+     return 0;
+ }
+ 
++static int kvm_arm_rme_put_core_regs(CPUState *cs)
++{
++    int i, ret;
++    ARMCPU *cpu = ARM_CPU(cs);
++    CPUARMState *env = &cpu->env;
++
++    /* The RME ABI only allows us to set 8 GPRs and the PC */
++    for (i = 0; i < 8; i++) {
++        ret = kvm_set_one_reg(cs, AARCH64_CORE_REG(regs.regs[i]),
++                              &env->xregs[i]);
++        if (ret) {
++            return ret;
++        }
++    }
++
++    ret = kvm_set_one_reg(cs, AARCH64_CORE_REG(regs.pc), &env->pc);
++    if (ret) {
++        return ret;
++    }
++
++    return 0;
++}
++
+ static int kvm_arm_put_core_regs(CPUState *cs, int level)
+ {
+     uint64_t val;
+@@ -792,6 +820,10 @@ static int kvm_arm_put_core_regs(CPUState *cs, int level)
+     ARMCPU *cpu = ARM_CPU(cs);
+     CPUARMState *env = &cpu->env;
+ 
++    if (cpu->kvm_rme) {
++        return kvm_arm_rme_put_core_regs(cs);
++    }
++
+     /* If we are in AArch32 mode then we need to copy the AArch32 regs to the
+      * AArch64 registers before pushing them out to 64-bit KVM.
+      */
+@@ -981,6 +1013,23 @@ static int kvm_arch_get_sve(CPUState *cs)
+     return 0;
+ }
+ 
++static int kvm_arm_rme_get_core_regs(CPUState *cs)
++{
++    int i, ret;
++    ARMCPU *cpu = ARM_CPU(cs);
++    CPUARMState *env = &cpu->env;
++
++    for (i = 0; i < 8; i++) {
++        ret = kvm_get_one_reg(cs, AARCH64_CORE_REG(regs.regs[i]),
++                              &env->xregs[i]);
++        if (ret) {
++            return ret;
++        }
++    }
++
++    return 0;
++}
++
+ static int kvm_arm_get_core_regs(CPUState *cs)
+ {
+     uint64_t val;
+@@ -991,6 +1040,10 @@ static int kvm_arm_get_core_regs(CPUState *cs)
+     ARMCPU *cpu = ARM_CPU(cs);
+     CPUARMState *env = &cpu->env;
+ 
++    if (cpu->kvm_rme) {
++        return kvm_arm_rme_get_core_regs(cs);
++    }
++
+     for (i = 0; i < 31; i++) {
+         ret = kvm_get_one_reg(cs, AARCH64_CORE_REG(regs.regs[i]),
+                               &env->xregs[i]);
+diff --git a/target/arm/kvm_arm.h b/target/arm/kvm_arm.h
+index 15ddc7a4..ff6ac086 100644
+--- a/target/arm/kvm_arm.h
++++ b/target/arm/kvm_arm.h
+@@ -387,6 +387,16 @@ int kvm_arm_set_irq(int cpu, int irqtype, int irq, int level);
+   */
+  int kvm_arm_rme_vm_type(MachineState *ms);
+ 
++ /**
++ * kvm_arm_rme_vcpu_init
++ * @cs: the CPU
++ *
++ * If the user requested a Realm, setup the given vCPU accordingly. Realm vCPUs
++ * behave a little differently, for example most of their register state is
++ * hidden from the host.
++ */
++int kvm_arm_rme_vcpu_init(CPUState *cs);
++
+ #else
+ 
+ /*
+@@ -476,6 +486,11 @@ static inline int kvm_arm_rme_vm_type(MachineState *ms)
+     g_assert_not_reached();
+ }
+ 
++static inline int kvm_arm_rme_vcpu_init(CPUState *cs)
++{
++    g_assert_not_reached();
++}
++
+ #endif
+ 
+ /**
+-- 
+2.51.0
+

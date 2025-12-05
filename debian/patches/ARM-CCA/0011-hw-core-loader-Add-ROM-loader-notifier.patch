@@ -1,0 +1,96 @@
+From 4e1a0eb7602543010161ecb839dcbbee950a8c77 Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Tue, 13 Jun 2023 18:01:50 +0100
+Subject: [PATCH 11/29] hw/core/loader: Add ROM loader notifier
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/4575987ee573474185f8ad8c715dffa9a40494ed
+
+Add a function to register a notifier, that is invoked after a ROM gets
+loaded into guest memory.
+
+It will be used by Arm confidential guest support, in order to register
+all blobs loaded into memory with KVM, so that their content is moved
+into Realm state and measured into the initial VM state.
+
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ hw/core/loader.c    | 14 ++++++++++++++
+ include/hw/loader.h | 15 +++++++++++++++
+ 2 files changed, 29 insertions(+)
+
+diff --git a/hw/core/loader.c b/hw/core/loader.c
+index e7a9b377..1627ef19 100644
+--- a/hw/core/loader.c
++++ b/hw/core/loader.c
+@@ -67,6 +67,8 @@
+ #include <zlib.h>
+ 
+ static int roms_loaded;
++static NotifierList rom_loader_notifier =
++    NOTIFIER_LIST_INITIALIZER(rom_loader_notifier);
+ 
+ /* return the size or -1 if error */
+ int64_t get_image_size(const char *filename)
+@@ -1209,6 +1211,11 @@ MemoryRegion *rom_add_blob(const char *name, const void *blob, size_t len,
+     return mr;
+ }
+ 
++void rom_add_load_notifier(Notifier *notifier)
++{
++    notifier_list_add(&rom_loader_notifier, notifier);
++}
++
+ /* This function is specific for elf program because we don't need to allocate
+  * all the rom. We just allocate the first part and the rest is just zeros. This
+  * is why romsize and datasize are different. Also, this function takes its own
+@@ -1250,6 +1257,7 @@ ssize_t rom_add_option(const char *file, int32_t bootindex)
+ static void rom_reset(void *unused)
+ {
+     Rom *rom;
++    RomLoaderNotifyData notify;
+ 
+     QTAILQ_FOREACH(rom, &roms, next) {
+         if (rom->fw_file) {
+@@ -1298,6 +1306,12 @@ static void rom_reset(void *unused)
+         cpu_flush_icache_range(rom->addr, rom->datasize);
+ 
+         trace_loader_write_rom(rom->name, rom->addr, rom->datasize, rom->isrom);
++
++        notify = (RomLoaderNotifyData) {
++            .addr = rom->addr,
++            .len = rom->datasize,
++        };
++        notifier_list_notify(&rom_loader_notifier, &notify);
+     }
+ }
+ 
+diff --git a/include/hw/loader.h b/include/hw/loader.h
+index 8685e273..5df632c5 100644
+--- a/include/hw/loader.h
++++ b/include/hw/loader.h
+@@ -356,6 +356,21 @@ void hmp_info_roms(Monitor *mon, const QDict *qdict);
+ ssize_t rom_add_vga(const char *file);
+ ssize_t rom_add_option(const char *file, int32_t bootindex);
+ 
++typedef struct RomLoaderNotifyData {
++    /* Address of the blob in guest memory */
++    hwaddr addr;
++    /* Length of the blob */
++    size_t len;
++} RomLoaderNotifyData;
++
++/**
++ * rom_add_load_notifier - Add a notifier for loaded images
++ *
++ * Add a notifier that will be invoked with a RomLoaderNotifyData structure for
++ * each blob loaded into guest memory, after the blob is loaded.
++ */
++void rom_add_load_notifier(Notifier *notifier);
++
+ /* This is the usual maximum in uboot, so if a uImage overflows this, it would
+  * overflow on real hardware too. */
+ #define UBOOT_MAX_GUNZIP_BYTES (64 << 20)
+-- 
+2.51.0
+

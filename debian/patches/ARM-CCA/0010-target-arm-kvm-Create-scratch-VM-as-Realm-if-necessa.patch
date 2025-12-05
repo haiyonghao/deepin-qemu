@@ -1,0 +1,47 @@
+From cf65f455266bc5527bb7bd60924fd787858aebdf Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Mon, 4 Dec 2023 18:48:36 +0000
+Subject: [PATCH 10/29] target/arm/kvm: Create scratch VM as Realm if necessary
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/bf7f456dfa60a022ac690004ddb08695b23ccde4
+
+Some ID registers have a different value for a Realm VM, for example
+ID_AA64DFR0_EL1 contains the number of breakpoints/watchpoints
+implemented by RMM instead of the hardware.
+
+Even though RMM is in charge of setting up most Realm registers, KVM
+still provides GET_ONE_REG interface on a Realm VM to probe the VM's
+capabilities.
+
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ target/arm/kvm.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/target/arm/kvm.c b/target/arm/kvm.c
+index 5b570550..6544efbe 100644
+--- a/target/arm/kvm.c
++++ b/target/arm/kvm.c
+@@ -71,6 +71,7 @@ bool kvm_arm_create_scratch_host_vcpu(const uint32_t *cpus_to_try,
+ {
+     int ret = 0, kvmfd = -1, vmfd = -1, cpufd = -1;
+     int max_vm_pa_size;
++    int vm_type;
+ 
+     kvmfd = qemu_open_old("/dev/kvm", O_RDWR);
+     if (kvmfd < 0) {
+@@ -80,8 +81,9 @@ bool kvm_arm_create_scratch_host_vcpu(const uint32_t *cpus_to_try,
+     if (max_vm_pa_size < 0) {
+         max_vm_pa_size = 0;
+     }
++    vm_type = kvm_arm_rme_vm_type(MACHINE(qdev_get_machine()));
+     do {
+-        vmfd = ioctl(kvmfd, KVM_CREATE_VM, max_vm_pa_size);
++        vmfd = ioctl(kvmfd, KVM_CREATE_VM, max_vm_pa_size | vm_type);
+     } while (vmfd == -1 && errno == EINTR);
+     if (vmfd < 0) {
+         goto err;
+-- 
+2.51.0
+

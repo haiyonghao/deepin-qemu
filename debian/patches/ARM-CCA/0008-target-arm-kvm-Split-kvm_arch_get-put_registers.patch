@@ -1,0 +1,85 @@
+From 690ca60815c903eddb7d330d07393b261de9bd64 Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Tue, 21 Jun 2022 11:52:14 +0100
+Subject: [PATCH 08/29] target/arm/kvm: Split kvm_arch_get/put_registers
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/a66c2761d7d6ba0f1f0db383cbad158e4cced72f
+
+The confidential guest support in KVM limits the number of registers
+that we can read and write. Split the get/put_registers function to
+prepare for it.
+
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Conflicts:
+      target/arm/kvm.c
+Signed-off-by: frankyj915 <yangjieyj.yang@huawei.com>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ target/arm/kvm64.c | 30 ++++++++++++++++++++++++++++--
+ 1 file changed, 28 insertions(+), 2 deletions(-)
+
+diff --git a/target/arm/kvm64.c b/target/arm/kvm64.c
+index 3b6ca6d8..0e39d6b5 100644
+--- a/target/arm/kvm64.c
++++ b/target/arm/kvm64.c
+@@ -782,7 +782,7 @@ static int kvm_arch_put_sve(CPUState *cs)
+     return 0;
+ }
+ 
+-int kvm_arch_put_registers(CPUState *cs, int level)
++static int kvm_arm_put_core_regs(CPUState *cs, int level)
+ {
+     uint64_t val;
+     uint32_t fpr;
+@@ -885,6 +885,19 @@ int kvm_arch_put_registers(CPUState *cs, int level)
+         return ret;
+     }
+ 
++    return 0;
++}
++
++int kvm_arch_put_registers(CPUState *cs, int level)
++{
++    int ret;
++    ARMCPU *cpu = ARM_CPU(cs);
++
++    ret = kvm_arm_put_core_regs(cs, level);
++    if (ret) {
++        return ret;
++    }
++
+     write_cpustate_to_list(cpu, true);
+ 
+     if (!write_list_to_kvmstate(cpu, level)) {
+@@ -968,7 +981,7 @@ static int kvm_arch_get_sve(CPUState *cs)
+     return 0;
+ }
+ 
+-int kvm_arch_get_registers(CPUState *cs)
++static int kvm_arm_get_core_regs(CPUState *cs)
+ {
+     uint64_t val;
+     unsigned int el;
+@@ -1071,6 +1084,19 @@ int kvm_arch_get_registers(CPUState *cs)
+     }
+     vfp_set_fpcr(env, fpr);
+ 
++    return 0;
++}
++
++int kvm_arch_get_registers(CPUState *cs)
++{
++    int ret;
++    ARMCPU *cpu = ARM_CPU(cs);
++
++    ret = kvm_arm_get_core_regs(cs);
++    if (ret) {
++        return ret;
++    }
++
+     ret = kvm_get_vcpu_events(cpu);
+     if (ret) {
+         return ret;
+-- 
+2.51.0
+

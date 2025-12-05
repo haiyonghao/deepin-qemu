@@ -1,0 +1,253 @@
+From 21593b7c9bc7098dac01c826a4bbd47a516231b0 Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Mon, 4 Dec 2023 18:48:19 +0000
+Subject: [PATCH 15/29] target/arm/cpu: Set number of breakpoints and
+ watchpoints in KVM
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/99082dee9c26b2b0f0f4d39bc9f6f99e73701e2f
+
+Add "num-breakpoints" and "num-watchpoints" CPU parameters to configure
+the debug features that KVM presents to the guest. The KVM vCPU
+configuration is modified by calling SET_ONE_REG on the ID register.
+
+This is needed for Realm VMs, whose parameters include breakpoints and
+watchpoints, and influence the Realm Initial Measurement.
+
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Conflicts:
+      target/arm/arm-qmp-cmds.c
+      target/arm/kvm.c
+Signed-off-by: frankyj915 <yangjieyj.yang@huawei.com>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ target/arm/arm-qmp-cmds.c |  1 +
+ target/arm/cpu.h          |  4 ++
+ target/arm/cpu64.c        | 77 +++++++++++++++++++++++++++++++++++++++
+ target/arm/kvm.c          | 54 +++++++++++++++++++++++++++
+ target/arm/kvm64.c        |  2 +-
+ target/arm/kvm_arm.h      |  2 +
+ 6 files changed, 139 insertions(+), 1 deletion(-)
+
+diff --git a/target/arm/arm-qmp-cmds.c b/target/arm/arm-qmp-cmds.c
+index b53d5efe..98b34984 100644
+--- a/target/arm/arm-qmp-cmds.c
++++ b/target/arm/arm-qmp-cmds.c
+@@ -96,6 +96,7 @@ static const char *cpu_model_advertised_features[] = {
+     "sve1408", "sve1536", "sve1664", "sve1792", "sve1920", "sve2048",
+     "kvm-no-adjvtime", "kvm-steal-time",
+     "pauth", "pauth-impdef", "pauth-qarma3",
++    "num-breakpoints", "num-watchpoints",
+     NULL
+ };
+ 
+diff --git a/target/arm/cpu.h b/target/arm/cpu.h
+index ed682b17..9109d9a9 100644
+--- a/target/arm/cpu.h
++++ b/target/arm/cpu.h
+@@ -1117,6 +1117,10 @@ struct ArchCPU {
+ 
+     /* Generic timer counter frequency, in Hz */
+     uint64_t gt_cntfrq_hz;
++
++    /* Allows to override the default configuration */
++    uint8_t num_bps;
++    uint8_t num_wps;
+ };
+ 
+ typedef struct ARMCPUInfo {
+diff --git a/target/arm/cpu64.c b/target/arm/cpu64.c
+index 1e9c6c85..6a9d8770 100644
+--- a/target/arm/cpu64.c
++++ b/target/arm/cpu64.c
+@@ -571,6 +571,82 @@ void aarch64_add_pauth_properties(Object *obj)
+     }
+ }
+ 
++#if defined(CONFIG_KVM)
++static void arm_cpu_get_num_wps(Object *obj, Visitor *v, const char *name,
++                                void *opaque, Error **errp)
++{
++    uint8_t val;
++    ARMCPU *cpu = ARM_CPU(obj);
++
++    val = cpu->num_wps;
++    if (val == 0) {
++        val = FIELD_EX64(cpu->isar.id_aa64dfr0, ID_AA64DFR0, WRPS) + 1;
++    }
++
++    visit_type_uint8(v, name, &val, errp);
++}
++
++static void arm_cpu_set_num_wps(Object *obj, Visitor *v, const char *name,
++                                void *opaque, Error **errp)
++{
++    uint8_t val;
++    ARMCPU *cpu = ARM_CPU(obj);
++    uint8_t max_wps = FIELD_EX64(cpu->isar.id_aa64dfr0, ID_AA64DFR0, WRPS) + 1;
++
++    if (!visit_type_uint8(v, name, &val, errp)) {
++        return;
++    }
++
++    if (val < 2 || val > max_wps) {
++        error_setg(errp, "invalid number of watchpoints");
++        return;
++    }
++
++    cpu->num_wps = val;
++}
++
++static void arm_cpu_get_num_bps(Object *obj, Visitor *v, const char *name,
++                                void *opaque, Error **errp)
++{
++    uint8_t val;
++    ARMCPU *cpu = ARM_CPU(obj);
++
++    val = cpu->num_bps;
++    if (val == 0) {
++        val = FIELD_EX64(cpu->isar.id_aa64dfr0, ID_AA64DFR0, BRPS) + 1;
++    }
++
++    visit_type_uint8(v, name, &val, errp);
++}
++
++static void arm_cpu_set_num_bps(Object *obj, Visitor *v, const char *name,
++                                void *opaque, Error **errp)
++{
++    uint8_t val;
++    ARMCPU *cpu = ARM_CPU(obj);
++    uint8_t max_bps = FIELD_EX64(cpu->isar.id_aa64dfr0, ID_AA64DFR0, BRPS) + 1;
++
++    if (!visit_type_uint8(v, name, &val, errp)) {
++        return;
++    }
++
++    if (val < 2 || val > max_bps) {
++        error_setg(errp, "invalid number of breakpoints");
++        return;
++    }
++
++    cpu->num_bps = val;
++}
++
++static void aarch64_add_kvm_writable_properties(Object *obj)
++{
++    object_property_add(obj, "num-breakpoints", "uint8", arm_cpu_get_num_bps,
++                        arm_cpu_set_num_bps, NULL, NULL);
++    object_property_add(obj, "num-watchpoints", "uint8", arm_cpu_get_num_wps,
++                        arm_cpu_set_num_wps, NULL, NULL);
++}
++#endif /* CONFIG_KVM */
++
+ void arm_cpu_lpa2_finalize(ARMCPU *cpu, Error **errp)
+ {
+     uint64_t t;
+@@ -713,6 +789,7 @@ static void aarch64_host_initfn(Object *obj)
+     if (arm_feature(&cpu->env, ARM_FEATURE_AARCH64)) {
+         aarch64_add_sve_properties(obj);
+         aarch64_add_pauth_properties(obj);
++        aarch64_add_kvm_writable_properties(obj);
+     }
+ #elif defined(CONFIG_HVF)
+     ARMCPU *cpu = ARM_CPU(obj);
+diff --git a/target/arm/kvm.c b/target/arm/kvm.c
+index 6544efbe..00f0e642 100644
+--- a/target/arm/kvm.c
++++ b/target/arm/kvm.c
+@@ -639,6 +639,54 @@ void kvm_arm_cpu_post_load(ARMCPU *cpu)
+     }
+ }
+ 
++static void kvm_arm_configure_aa64dfr0(ARMCPU *cpu)
++{
++    int ret;
++    uint64_t val, newval;
++    CPUState *cs = CPU(cpu);
++
++    if (!cpu->num_bps && !cpu->num_wps) {
++        return;
++    }
++
++    newval = cpu->isar.id_aa64dfr0;
++    if (cpu->num_bps) {
++        uint64_t ctx_cmps = FIELD_EX64(newval, ID_AA64DFR0, CTX_CMPS);
++
++        /* CTX_CMPs is never greater than BRPs */
++        ctx_cmps = MIN(ctx_cmps, cpu->num_bps - 1);
++        newval = FIELD_DP64(newval, ID_AA64DFR0, BRPS, cpu->num_bps - 1);
++        newval = FIELD_DP64(newval, ID_AA64DFR0, CTX_CMPS, ctx_cmps);
++    }
++    if (cpu->num_wps) {
++        newval = FIELD_DP64(newval, ID_AA64DFR0, WRPS, cpu->num_wps - 1);
++    }
++    ret = kvm_set_one_reg(cs, KVM_REG_ARM_ID_AA64DFR0_EL1, &newval);
++    if (ret) {
++        error_report("Failed to set KVM_REG_ARM_ID_AA64DFR0_EL1");
++        return;
++    }
++
++    /*
++     * Check if the write succeeded. KVM does offer the writable mask for this
++     * register, but this way we also check if the value we wrote was sane.
++     */
++    ret = kvm_get_one_reg(cs, KVM_REG_ARM_ID_AA64DFR0_EL1, &val);
++    if (ret) {
++        error_report("Failed to get KVM_REG_ARM_ID_AA64DFR0_EL1");
++        return;
++    }
++
++    if (val != newval) {
++        error_report("Failed to update KVM_REG_ARM_ID_AA64DFR0_EL1");
++    }
++}
++
++static void kvm_arm_configure_vcpu_regs(ARMCPU *cpu)
++{
++    kvm_arm_configure_aa64dfr0(cpu);
++}
++
+ void kvm_arm_reset_vcpu(ARMCPU *cpu)
+ {
+     int ret;
+@@ -651,6 +699,12 @@ void kvm_arm_reset_vcpu(ARMCPU *cpu)
+         fprintf(stderr, "kvm_arm_vcpu_init failed: %s\n", strerror(-ret));
+         abort();
+     }
++
++    /*
++     * Before loading the KVM values into CPUState, update the KVM configuration
++     */
++    kvm_arm_configure_vcpu_regs(cpu);
++
+     if (!write_kvmstate_to_list(cpu)) {
+         fprintf(stderr, "write_kvmstate_to_list failed\n");
+         abort();
+diff --git a/target/arm/kvm64.c b/target/arm/kvm64.c
+index b5d5f47f..f5621b2e 100644
+--- a/target/arm/kvm64.c
++++ b/target/arm/kvm64.c
+@@ -297,7 +297,7 @@ bool kvm_arm_get_host_cpu_features(ARMHostCPUFeatures *ahcf)
+         err |= read_sys_reg64(fdarray[2], &ahcf->isar.id_aa64smfr0,
+                               ARM64_SYS_REG(3, 0, 0, 4, 5));
+         err |= read_sys_reg64(fdarray[2], &ahcf->isar.id_aa64dfr0,
+-                              ARM64_SYS_REG(3, 0, 0, 5, 0));
++                              KVM_REG_ARM_ID_AA64DFR0_EL1);
+         err |= read_sys_reg64(fdarray[2], &ahcf->isar.id_aa64dfr1,
+                               ARM64_SYS_REG(3, 0, 0, 5, 1));
+         err |= read_sys_reg64(fdarray[2], &ahcf->isar.id_aa64isar0,
+diff --git a/target/arm/kvm_arm.h b/target/arm/kvm_arm.h
+index 499d83f9..72a455e6 100644
+--- a/target/arm/kvm_arm.h
++++ b/target/arm/kvm_arm.h
+@@ -18,6 +18,8 @@
+ #define KVM_ARM_VGIC_V2   (1 << 0)
+ #define KVM_ARM_VGIC_V3   (1 << 1)
+ 
++#define KVM_REG_ARM_ID_AA64DFR0_EL1     ARM64_SYS_REG(3, 0, 0, 5, 0)
++
+ /**
+  * kvm_arm_init_debug() - initialize guest debug capabilities
+  * @s: KVMState
+-- 
+2.51.0
+

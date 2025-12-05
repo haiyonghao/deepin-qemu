@@ -1,0 +1,121 @@
+From f7f495f863cc75c68a8fda52201c278e119222f6 Mon Sep 17 00:00:00 2001
+From: Paolo Bonzini <pbonzini@redhat.com>
+Date: Mon, 18 Mar 2024 14:41:10 -0400
+Subject: [PATCH 06/29] KVM: track whether guest state is encrypted
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Reference:https://gitlab.com/qemu-project/qemu/-/commit/5c3131c392f84c660033d511ec39872d8beb4b1e
+
+So far, KVM has allowed KVM_GET/SET_* ioctls to execute even if the
+guest state is encrypted, in which case they do nothing.  For the new
+API using VM types, instead, the ioctls will fail which is a safer and
+more robust approach.
+
+The new API will be the only one available for SEV-SNP and TDX, but it
+is also usable for SEV and SEV-ES.  In preparation for that, require
+architecture-specific KVM code to communicate the point at which guest
+state is protected (which must be after kvm_cpu_synchronize_post_init(),
+though that might change in the future in order to suppor migration).
+From that point, skip reading registers so that cpu->vcpu_dirty is
+never true: if it ever becomes true, kvm_arch_put_registers() will
+fail miserably.
+
+Reviewed-by: Philippe Mathieu-Daudé <philmd@linaro.org>
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>
+Conflicts:
+      include/sysemu/kvm.h
+Signed-off-by: frankyj915 <yangjieyj.yang@huawei.com>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ accel/kvm/kvm-all.c      | 17 ++++++++++++++---
+ include/sysemu/kvm.h     |  2 ++
+ include/sysemu/kvm_int.h |  1 +
+ target/i386/sev.c        |  1 +
+ 4 files changed, 18 insertions(+), 3 deletions(-)
+
+diff --git a/accel/kvm/kvm-all.c b/accel/kvm/kvm-all.c
+index 22830726..35f6e7ad 100644
+--- a/accel/kvm/kvm-all.c
++++ b/accel/kvm/kvm-all.c
+@@ -2732,7 +2732,7 @@ bool kvm_cpu_check_are_resettable(void)
+ 
+ static void do_kvm_cpu_synchronize_state(CPUState *cpu, run_on_cpu_data arg)
+ {
+-    if (!cpu->vcpu_dirty) {
++    if (!cpu->vcpu_dirty && !kvm_state->guest_state_protected) {
+         int ret = kvm_arch_get_registers(cpu);
+         if (ret) {
+             error_report("Failed to get registers: %s", strerror(-ret));
+@@ -2746,7 +2746,7 @@ static void do_kvm_cpu_synchronize_state(CPUState *cpu, run_on_cpu_data arg)
+ 
+ void kvm_cpu_synchronize_state(CPUState *cpu)
+ {
+-    if (!cpu->vcpu_dirty) {
++    if (!cpu->vcpu_dirty && !kvm_state->guest_state_protected) {
+         run_on_cpu(cpu, do_kvm_cpu_synchronize_state, RUN_ON_CPU_NULL);
+     }
+ }
+@@ -2781,7 +2781,13 @@ static void do_kvm_cpu_synchronize_post_init(CPUState *cpu, run_on_cpu_data arg)
+ 
+ void kvm_cpu_synchronize_post_init(CPUState *cpu)
+ {
+-    run_on_cpu(cpu, do_kvm_cpu_synchronize_post_init, RUN_ON_CPU_NULL);
++    if (!kvm_state->guest_state_protected) {
++        /*
++         * This runs before the machine_init_done notifiers, and is the last
++         * opportunity to synchronize the state of confidential guests.
++         */
++        run_on_cpu(cpu, do_kvm_cpu_synchronize_post_init, RUN_ON_CPU_NULL);
++    }
+ }
+ 
+ static void do_kvm_cpu_synchronize_pre_loadvm(CPUState *cpu, run_on_cpu_data arg)
+@@ -4120,3 +4126,8 @@ void query_stats_schemas_cb(StatsSchemaList **result, Error **errp)
+         query_stats_schema_vcpu(first_cpu, &stats_args);
+     }
+ }
++
++void kvm_mark_guest_state_protected(void)
++{
++    kvm_state->guest_state_protected = true;
++}
+diff --git a/include/sysemu/kvm.h b/include/sysemu/kvm.h
+index 2275f77e..fee67ecf 100644
+--- a/include/sysemu/kvm.h
++++ b/include/sysemu/kvm.h
+@@ -580,4 +580,6 @@ bool kvm_arch_cpu_check_are_resettable(void);
+ bool kvm_dirty_ring_enabled(void);
+ 
+ uint32_t kvm_dirty_ring_size(void);
++
++void kvm_mark_guest_state_protected(void);
+ #endif
+diff --git a/include/sysemu/kvm_int.h b/include/sysemu/kvm_int.h
+index fd846394..8869adad 100644
+--- a/include/sysemu/kvm_int.h
++++ b/include/sysemu/kvm_int.h
+@@ -87,6 +87,7 @@ struct KVMState
+     bool kernel_irqchip_required;
+     OnOffAuto kernel_irqchip_split;
+     bool sync_mmu;
++    bool guest_state_protected;
+     uint64_t manual_dirty_log_protect;
+     /* The man page (and posix) say ioctl numbers are signed int, but
+      * they're not.  Linux, glibc and *BSD all treat ioctl numbers as
+diff --git a/target/i386/sev.c b/target/i386/sev.c
+index 23122068..fb0c3a28 100644
+--- a/target/i386/sev.c
++++ b/target/i386/sev.c
+@@ -936,6 +936,7 @@ sev_launch_get_measure(Notifier *notifier, void *unused)
+         if (ret) {
+             exit(1);
+         }
++        kvm_mark_guest_state_protected();
+     }
+ 
+     /* query the measurement blob length */
+-- 
+2.51.0
+

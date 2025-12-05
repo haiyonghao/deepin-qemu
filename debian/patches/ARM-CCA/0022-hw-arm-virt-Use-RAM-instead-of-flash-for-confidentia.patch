@@ -1,0 +1,175 @@
+From 4c5738e277704086f2889212691ee2cd31960eb6 Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Fri, 12 Aug 2022 12:08:58 +0100
+Subject: [PATCH 22/29] hw/arm/virt: Use RAM instead of flash for confidential
+ guest firmware
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/a8d4685f97e63dac012647cc3f9b1d830b784f8c
+
+The flash device that holds firmware code relies on read-only stage-2
+mappings. Read accesses behave as RAM and write accesses as MMIO. Since
+the RMM does not support read-only mappings we cannot use the flash
+device as-is.
+
+That isn't a problem because the firmware does not want to disclose any
+information to the host, hence will not store its variables in clear
+persistent memory. We can therefore replace the flash device with RAM,
+and load the firmware there.
+
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Conflicts:
+      hw/arm/boot.c
+      hw/arm/virt.c
+      include/hw/arm/boot.h
+Signed-off-by: frankyj915 <yangjieyj.yang@huawei.com>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ hw/arm/boot.c         | 29 +++++++++++++++++++++++++++--
+ hw/arm/virt.c         | 34 ++++++++++++++++++++++++++++++++++
+ include/hw/arm/boot.h |  9 +++++++++
+ 3 files changed, 70 insertions(+), 2 deletions(-)
+
+diff --git a/hw/arm/boot.c b/hw/arm/boot.c
+index 699acd07..276b6c62 100644
+--- a/hw/arm/boot.c
++++ b/hw/arm/boot.c
+@@ -1144,7 +1144,32 @@ static void arm_setup_direct_kernel_boot(ARMCPU *cpu,
+     }
+ }
+ 
+-static void arm_setup_firmware_boot(ARMCPU *cpu, struct arm_boot_info *info)
++static void arm_setup_confidential_firmware_boot(ARMCPU *cpu,
++                                                 struct arm_boot_info *info,
++                                                 const char *firmware_filename)
++{
++    ssize_t fw_size;
++    const char *fname;
++    AddressSpace *as = arm_boot_address_space(cpu, info);
++
++    fname = qemu_find_file(QEMU_FILE_TYPE_BIOS, firmware_filename);
++    if (!fname) {
++        error_report("Could not find firmware image '%s'", firmware_filename);
++        exit(1);
++    }
++
++    fw_size = load_image_targphys_as(firmware_filename,
++                                     info->firmware_base,
++                                     info->firmware_max_size, as);
++    if (fw_size <= 0) {
++        error_report("could not load firmware '%s'", firmware_filename);
++        exit(1);
++    }
++}
++
++static void arm_setup_firmware_boot(ARMCPU *cpu, struct arm_boot_info *info,
++	const char *firmware_filename)
++
+ {
+     /* Set up for booting firmware (which might load a kernel via fw_cfg) */
+ 
+@@ -1238,7 +1263,7 @@ void arm_load_kernel(ARMCPU *cpu, MachineState *ms, struct arm_boot_info *info)
+ 
+     /* Load the kernel.  */
+     if (!info->kernel_filename || info->firmware_loaded) {
+-        arm_setup_firmware_boot(cpu, info);
++        arm_setup_firmware_boot(cpu, info, ms->firmware);
+     } else {
+         arm_setup_direct_kernel_boot(cpu, info);
+     }
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index 0367bae6..a45e4e83 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -1211,6 +1211,10 @@ static void virt_flash_fdt(VirtMachineState *vms,
+     MachineState *ms = MACHINE(vms);
+     char *nodename;
+ 
++    if (virt_machine_is_confidential(vms)) {
++        return;
++    }
++
+     if (sysmem == secure_sysmem) {
+         /* Report both flash devices as a single node in the DT */
+         nodename = g_strdup_printf("/flash@%" PRIx64, flashbase);
+@@ -1246,6 +1250,24 @@ static void virt_flash_fdt(VirtMachineState *vms,
+     }
+ }
+ 
++static bool virt_confidential_firmware_init(VirtMachineState *vms,
++                                            MemoryRegion *sysmem)
++{
++    MemoryRegion *fw_ram;
++    hwaddr fw_base = vms->memmap[VIRT_FLASH].base;
++    hwaddr fw_size = vms->memmap[VIRT_FLASH].size;
++
++    if (!MACHINE(vms)->firmware) {
++        return false;
++    }
++
++    fw_ram = g_new(MemoryRegion, 1);
++    memory_region_init_ram(fw_ram, NULL, "fw_ram", fw_size, NULL);
++    memory_region_add_subregion(sysmem, fw_base, fw_ram);
++
++    return true;
++}
++
+ static bool virt_firmware_init(VirtMachineState *vms,
+                                MemoryRegion *sysmem,
+                                MemoryRegion *secure_sysmem)
+@@ -1264,6 +1286,15 @@ static bool virt_firmware_init(VirtMachineState *vms,
+ 
+     pflash_blk0 = pflash_cfi01_get_blk(vms->flash[0]);
+ 
++    /*
++     * For a confidential VM, the firmware image and any boot information,
++     * including EFI variables, are stored in RAM in order to be measurable and
++     * private. Create a RAM region and load the firmware image there.
++     */
++     if (virt_machine_is_confidential(vms)) {
++        return virt_confidential_firmware_init(vms, sysmem);
++    }
++
+     bios_name = MACHINE(vms)->firmware;
+     if (bios_name) {
+         char *fname;
+@@ -2349,7 +2380,10 @@ static void machvirt_init(MachineState *machine)
+     vms->bootinfo.get_dtb = machvirt_dtb;
+     vms->bootinfo.skip_dtb_autoload = true;
+     vms->bootinfo.firmware_loaded = firmware_loaded;
++    vms->bootinfo.firmware_base = vms->memmap[VIRT_FLASH].base;
++    vms->bootinfo.firmware_max_size = vms->memmap[VIRT_FLASH].size;
+     vms->bootinfo.psci_conduit = vms->psci_conduit;
++    vms->bootinfo.confidential = virt_machine_is_confidential(vms);
+     arm_load_kernel(ARM_CPU(first_cpu), machine, &vms->bootinfo);
+ 
+     vms->machine_done.notify = virt_machine_done;
+diff --git a/include/hw/arm/boot.h b/include/hw/arm/boot.h
+index 80c492d7..d91cfc69 100644
+--- a/include/hw/arm/boot.h
++++ b/include/hw/arm/boot.h
+@@ -112,6 +112,10 @@ struct arm_boot_info {
+      */
+     bool firmware_loaded;
+ 
++    /* Used when loading firmware into RAM */
++    hwaddr firmware_base;
++    hwaddr firmware_max_size;
++
+     /* Address at which board specific loader/setup code exists. If enabled,
+      * this code-blob will run before anything else. It must return to the
+      * caller via the link register. There is no stack set up. Enabled by
+@@ -132,6 +136,11 @@ struct arm_boot_info {
+     bool secure_board_setup;
+ 
+     arm_endianness endianness;
++
++    /*
++     * Confidential guest boot loads everything into RAM so it can be measured.
++     */
++    bool confidential;
+ };
+ 
+ /**
+-- 
+2.51.0
+

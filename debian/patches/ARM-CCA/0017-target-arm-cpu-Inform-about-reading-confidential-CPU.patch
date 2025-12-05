@@ -1,0 +1,37 @@
+From 2e5dca9de2a092041becab0c4d8e2a0292f33722 Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Tue, 7 Feb 2023 13:05:40 +0000
+Subject: [PATCH 17/29] target/arm/cpu: Inform about reading confidential CPU
+ registers
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/f7dbc9b0e0677feabac408bed8fb9fcbd9b946c3
+
+The host cannot access registers of a Realm. Instead of showing all
+registers as zero in "info registers", display a message about this
+restriction.
+
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ target/arm/cpu.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/target/arm/cpu.c b/target/arm/cpu.c
+index efb22a87..884d6093 100644
+--- a/target/arm/cpu.c
++++ b/target/arm/cpu.c
+@@ -1062,6 +1062,11 @@ static void aarch64_cpu_dump_state(CPUState *cs, FILE *f, int flags)
+     const char *ns_status;
+     bool sve;
+ 
++    if (cpu->kvm_rme) {
++        qemu_fprintf(f, "the CPU registers are confidential to the realm\n");
++        return;
++    }
++
+     qemu_fprintf(f, " PC=%016" PRIx64 " ", env->pc);
+     for (i = 0; i < 32; i++) {
+         if (i == 31) {
+-- 
+2.51.0
+

@@ -1,0 +1,177 @@
+From e9d839dfa8a131847437362728c17a34cce04862 Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Fri, 13 May 2022 09:08:54 +0100
+Subject: [PATCH 01/29] linux-headers: Add KVM Arm RME definitions to Linux
+ headers
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/b1872e38b35f4e7b820880694ad876c41aabaa85
+
+Copy the KVM definitions for Arm RME from the development branch.
+Don't merge, they will be added from the periodic Linux header sync.
+
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Conflicts:
+      linux-headers/asm-arm64/kvm.h
+      linux-headers/linux/kvm.h
+Signed-off-by: frankyj915 <yangjieyj.yang@huawei.com>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ linux-headers/asm-arm64/kvm.h | 59 +++++++++++++++++++++++++++++++++++
+ linux-headers/linux/kvm.h     | 27 +++++++++++++---
+ 2 files changed, 82 insertions(+), 4 deletions(-)
+
+diff --git a/linux-headers/asm-arm64/kvm.h b/linux-headers/asm-arm64/kvm.h
+index c59ea55c..b30991de 100644
+--- a/linux-headers/asm-arm64/kvm.h
++++ b/linux-headers/asm-arm64/kvm.h
+@@ -110,6 +110,7 @@ struct kvm_regs {
+ #define KVM_ARM_VCPU_PTRAUTH_ADDRESS	5 /* VCPU uses address authentication */
+ #define KVM_ARM_VCPU_PTRAUTH_GENERIC	6 /* VCPU uses generic authentication */
+ #define KVM_ARM_VCPU_HAS_EL2		7 /* Support nested virtualization */
++#define KVM_ARM_VCPU_REC		9 /* VCPU REC state as part of Realm */
+ 
+ struct kvm_vcpu_init {
+ 	__u32 target;
+@@ -365,6 +366,7 @@ enum {
+ 	KVM_REG_ARM_STD_HYP_BIT_PV_TIME	= 0,
+ };
+ 
++/* Vendor hyper call function numbers 0-63 */
+ #define KVM_REG_ARM_VENDOR_HYP_BMAP		KVM_REG_ARM_FW_FEAT_BMAP_REG(2)
+ 
+ enum {
+@@ -372,6 +374,14 @@ enum {
+ 	KVM_REG_ARM_VENDOR_HYP_BIT_PTP		= 1,
+ };
+ 
++/* Vendor hyper call function numbers 64-127 */
++#define KVM_REG_ARM_VENDOR_HYP_BMAP_2		KVM_REG_ARM_FW_FEAT_BMAP_REG(3)
++
++enum {
++	KVM_REG_ARM_VENDOR_HYP_BIT_DISCOVER_IMPL_VER	= 0,
++	KVM_REG_ARM_VENDOR_HYP_BIT_DISCOVER_IMPL_CPUS	= 1,
++};
++
+ /* Device Control API on vm fd */
+ #define KVM_ARM_VM_SMCCC_CTRL		0
+ #define   KVM_ARM_VM_SMCCC_FILTER	0
+@@ -394,6 +404,7 @@ enum {
+ #define KVM_DEV_ARM_VGIC_GRP_CPU_SYSREGS 6
+ #define KVM_DEV_ARM_VGIC_GRP_LEVEL_INFO  7
+ #define KVM_DEV_ARM_VGIC_GRP_ITS_REGS 8
++#define KVM_DEV_ARM_VGIC_GRP_MAINT_IRQ  9
+ #define KVM_DEV_ARM_VGIC_LINE_LEVEL_INFO_SHIFT	10
+ #define KVM_DEV_ARM_VGIC_LINE_LEVEL_INFO_MASK \
+ 			(0x3fffffULL << KVM_DEV_ARM_VGIC_LINE_LEVEL_INFO_SHIFT)
+@@ -406,6 +417,54 @@ enum {
+ #define   KVM_DEV_ARM_VGIC_SAVE_PENDING_TABLES	3
+ #define   KVM_DEV_ARM_ITS_CTRL_RESET		4
+ 
++/* KVM_CAP_ARM_RME on VM fd */
++#define KVM_CAP_ARM_RME_CONFIG_REALM		0
++#define KVM_CAP_ARM_RME_CREATE_REALM		1
++#define KVM_CAP_ARM_RME_INIT_RIPAS_REALM	2
++#define KVM_CAP_ARM_RME_POPULATE_REALM		3
++#define KVM_CAP_ARM_RME_ACTIVATE_REALM		4
++
++/* List of configuration items accepted for KVM_CAP_ARM_RME_CONFIG_REALM */
++#define ARM_RME_CONFIG_RPV			0
++#define ARM_RME_CONFIG_HASH_ALGO		1
++
++#define ARM_RME_CONFIG_MEASUREMENT_ALGO_SHA256		0
++#define ARM_RME_CONFIG_MEASUREMENT_ALGO_SHA512		1
++
++#define ARM_RME_CONFIG_RPV_SIZE 64
++
++struct arm_rme_config {
++	__u32 cfg;
++	union {
++		/* cfg == ARM_RME_CONFIG_RPV */
++		struct {
++			__u8	rpv[ARM_RME_CONFIG_RPV_SIZE];
++		};
++
++		/* cfg == ARM_RME_CONFIG_HASH_ALGO */
++		struct {
++			__u32	hash_algo;
++		};
++
++		/* Fix the size of the union */
++		__u8	reserved[256];
++	};
++};
++
++#define KVM_ARM_RME_POPULATE_FLAGS_MEASURE	(1 << 0)
++struct arm_rme_populate_realm {
++	__u64 base;
++	__u64 size;
++	__u32 flags;
++	__u32 reserved[3];
++};
++
++struct arm_rme_init_ripas {
++	__u64 base;
++	__u64 size;
++	__u64 reserved[2];
++};
++
+ /* Device Control API on vcpu fd */
+ #define KVM_ARM_VCPU_PMU_V3_CTRL	0
+ #define   KVM_ARM_VCPU_PMU_V3_IRQ	0
+diff --git a/linux-headers/linux/kvm.h b/linux-headers/linux/kvm.h
+index e1ebbcd5..7a341f8d 100644
+--- a/linux-headers/linux/kvm.h
++++ b/linux-headers/linux/kvm.h
+@@ -916,14 +916,25 @@ struct kvm_ppc_resize_hpt {
+ #define KVM_S390_SIE_PAGE_OFFSET 1
+ 
+ /*
+- * On arm64, machine type can be used to request the physical
+- * address size for the VM. Bits[7-0] are reserved for the guest
+- * PA size shift (i.e, log2(PA_Size)). For backward compatibility,
+- * value 0 implies the default IPA size, 40bits.
++ * On arm64, machine type can be used to request both the machine type and
++ * the physical address size for the VM.
++ *
++ * Bits[11-8] are reserved for the ARM specific machine type.
++ *
++ * Bits[7-0] are reserved for the guest PA size shift (i.e, log2(PA_Size)).
++ * For backward compatibility, value 0 implies the default IPA size, 40bits.
+  */
++#define KVM_VM_TYPE_ARM_SHIFT		8
++#define KVM_VM_TYPE_ARM_MASK		(0xfULL << KVM_VM_TYPE_ARM_SHIFT)
++#define KVM_VM_TYPE_ARM(_type)		\
++	(((_type) << KVM_VM_TYPE_ARM_SHIFT) & KVM_VM_TYPE_ARM_MASK)
++#define KVM_VM_TYPE_ARM_NORMAL		KVM_VM_TYPE_ARM(0)
++#define KVM_VM_TYPE_ARM_REALM		KVM_VM_TYPE_ARM(1)
++
+ #define KVM_VM_TYPE_ARM_IPA_SIZE_MASK	0xffULL
+ #define KVM_VM_TYPE_ARM_IPA_SIZE(x)		\
+ 	((x) & KVM_VM_TYPE_ARM_IPA_SIZE_MASK)
++
+ /*
+  * ioctls for /dev/kvm fds:
+  */
+@@ -1198,6 +1209,7 @@ struct kvm_ppc_resize_hpt {
+ #define KVM_CAP_ARM_EAGER_SPLIT_CHUNK_SIZE 228
+ #define KVM_CAP_ARM_SUPPORTED_BLOCK_SIZES 229
+ #define KVM_CAP_ARM_SUPPORTED_REG_MASK_RANGES 230
++#define KVM_CAP_ARM_RME 240
+ 
+ #define KVM_CAP_SEV_ES_GHCB 500
+ #define KVM_CAP_HYGON_COCO_EXT 501
+@@ -2389,4 +2401,11 @@ struct kvm_s390_zpci_op {
+ /* flags for kvm_s390_zpci_op->u.reg_aen.flags */
+ #define KVM_S390_ZPCIOP_REGAEN_HOST    (1 << 0)
+ 
++/* Available with KVM_CAP_ARM_RME, only for VMs with KVM_VM_TYPE_ARM_REALM  */
++struct kvm_arm_rmm_psci_complete {
++	__u64 target_mpidr;
++	__u32 psci_status;
++	__u32 padding[3];
++};
++
+ #endif /* __LINUX_KVM_H */
+-- 
+2.51.0
+

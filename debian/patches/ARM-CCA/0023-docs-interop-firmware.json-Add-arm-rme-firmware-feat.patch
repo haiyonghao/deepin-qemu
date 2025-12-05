@@ -1,0 +1,54 @@
+From 062433a1cfab55825bbc7848ea2d3063aa4799c8 Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Wed, 16 Apr 2025 13:40:08 +0100
+Subject: [PATCH 23/29] docs/interop/firmware.json: Add arm-rme firmware
+ feature
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/b547ad23843a33030968a51e547d0e2ff875086b
+
+Some distributions provide packages continaing firmware to be run under
+QEMU, such as "qemu-efi-aarch64" or "edk2-aarch64". Those packages also
+contain descriptors in /usr/share/qemu/firmware/*.json listing the
+firmware features, so that environments like libvirt can figure out
+which firmware they can load.
+
+Define an optional feature for arm64 firmware to indicate that a
+firmware supports running in a Realm. Firmware implementations need
+extra support for running in a Realm, in particular to distinguish
+shared from private guest memory.
+
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Conflicts:
+      docs/interop/firmware.json
+Signed-off-by: frankyj915 <yangjieyj.yang@huawei.com>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ docs/interop/firmware.json | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/docs/interop/firmware.json b/docs/interop/firmware.json
+index cc8f8691..08c2fbab 100644
+--- a/docs/interop/firmware.json
++++ b/docs/interop/firmware.json
+@@ -127,6 +127,9 @@
+ #               options related to this feature are documented in
+ #               "docs/system/i386/amd-memory-encryption.rst".
+ #
++# @arm-rme: The firmware supports running in a Realm, under the Arm Realm
++#           Management Extension (RME).
++#
+ # @intel-tdx: The firmware supports running under Intel Trust Domain
+ #             Extensions (TDX).
+ #
+@@ -196,7 +199,7 @@
+ { 'enum' : 'FirmwareFeature',
+   'data' : [ 'acpi-s3', 'acpi-s4',
+              'amd-sev', 'amd-sev-es', 'amd-sev-snp',
+-             'intel-tdx',
++             'arm-rme', 'intel-tdx',
+              'enrolled-keys', 'requires-smm', 'secure-boot',
+              'verbose-dynamic', 'verbose-static' ] }
+ 
+-- 
+2.51.0
+

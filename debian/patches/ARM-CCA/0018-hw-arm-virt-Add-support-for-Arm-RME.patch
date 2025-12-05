@@ -1,0 +1,74 @@
+From 9d200e0ac651c84e4e84edbe565f1bb717eecab7 Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Mon, 6 Feb 2023 16:49:25 +0000
+Subject: [PATCH 18/29] hw/arm/virt: Add support for Arm RME
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/6e0e9f49e9bdf22e4bd06d3506b9abc63c927b85
+
+When confidential-guest-support is enabled for the virt machine, add the
+RME flag to the VM type.
+
+The HVC conduit for PSCI is not supported for Realms.
+
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Conflicts:
+      hw/arm/virt.c
+Signed-off-by: frankyj915 <yangjieyj.yang@huawei.com>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ hw/arm/virt.c | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index be2856c0..ed1bca55 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -236,6 +236,11 @@ static bool cpu_type_valid(const char *cpu)
+     return false;
+ }
+ 
++static bool virt_machine_is_confidential(VirtMachineState *vms)
++{
++    return MACHINE(vms)->cgs;
++}
++
+ static void create_randomness(MachineState *ms, const char *node)
+ {
+     struct {
+@@ -2100,10 +2105,11 @@ static void machvirt_init(MachineState *machine)
+      * if the guest has EL2 then we will use SMC as the conduit,
+      * and otherwise we will use HVC (for backwards compatibility and
+      * because if we're using KVM then we must use HVC).
++     * Realm guests must also use SMC.
+      */
+     if (vms->secure && firmware_loaded) {
+         vms->psci_conduit = QEMU_PSCI_CONDUIT_DISABLED;
+-    } else if (vms->virt) {
++    } else if (vms->virt || virt_machine_is_confidential(vms)) {
+         vms->psci_conduit = QEMU_PSCI_CONDUIT_SMC;
+     } else {
+         vms->psci_conduit = QEMU_PSCI_CONDUIT_HVC;
+@@ -2901,6 +2907,7 @@ static HotplugHandler *virt_machine_get_hotplug_handler(MachineState *machine,
+ static int virt_kvm_type(MachineState *ms, const char *type_str)
+ {
+     VirtMachineState *vms = VIRT_MACHINE(ms);
++    int rme_vm_type = kvm_arm_rme_vm_type(ms);
+     int max_vm_pa_size, requested_pa_size;
+     bool fixed_ipa;
+ 
+@@ -2930,7 +2937,11 @@ static int virt_kvm_type(MachineState *ms, const char *type_str)
+      * the implicit legacy 40b IPA setting, in which case the kvm_type
+      * must be 0.
+      */
+-    return fixed_ipa ? 0 : requested_pa_size;
++     if (fixed_ipa) {
++        return 0;
++    }
++
++    return requested_pa_size | rme_vm_type;
+ }
+ 
+ static void virt_machine_class_init(ObjectClass *oc, void *data)
+-- 
+2.51.0
+

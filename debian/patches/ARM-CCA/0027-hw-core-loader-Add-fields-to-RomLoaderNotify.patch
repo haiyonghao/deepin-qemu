@@ -1,0 +1,48 @@
+From 7df7fc8e401d9c96e78965c37888944fd3abbaf9 Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Thu, 7 Nov 2024 14:03:34 +0000
+Subject: [PATCH 27/29] hw/core/loader: Add fields to RomLoaderNotify
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/3bf3a64142d22868078d191d5ff0e6a3ddf0644c
+
+In order to write an event log, the ROM load notification handler needs
+two more fields.
+
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ hw/core/loader.c    | 2 ++
+ include/hw/loader.h | 4 ++++
+ 2 files changed, 6 insertions(+)
+
+diff --git a/hw/core/loader.c b/hw/core/loader.c
+index 1627ef19..7990147a 100644
+--- a/hw/core/loader.c
++++ b/hw/core/loader.c
+@@ -1308,6 +1308,8 @@ static void rom_reset(void *unused)
+         trace_loader_write_rom(rom->name, rom->addr, rom->datasize, rom->isrom);
+ 
+         notify = (RomLoaderNotifyData) {
++            .name = rom->name,
++            .blob_ptr = rom->data,
+             .addr = rom->addr,
+             .len = rom->datasize,
+         };
+diff --git a/include/hw/loader.h b/include/hw/loader.h
+index 5df632c5..3a5212b8 100644
+--- a/include/hw/loader.h
++++ b/include/hw/loader.h
+@@ -357,6 +357,10 @@ ssize_t rom_add_vga(const char *file);
+ ssize_t rom_add_option(const char *file, int32_t bootindex);
+ 
+ typedef struct RomLoaderNotifyData {
++    /* Description of the loaded ROM */
++    const char *name;
++    /* Blob */
++    void *blob_ptr;
+     /* Address of the blob in guest memory */
+     hwaddr addr;
+     /* Length of the blob */
+-- 
+2.51.0
+

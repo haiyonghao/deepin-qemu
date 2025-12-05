@@ -1,0 +1,158 @@
+From 5498da9580a23b3aa8b1707e20dae3b63eafb654 Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Thu, 27 Oct 2022 19:22:48 +0100
+Subject: [PATCH 14/29] target/arm/kvm-rme: Add measurement algorithm property
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/26ed0bafc44a8d4d8fcc46a1ee7a2b8aa35b1c33
+
+This option selects which measurement algorithm to use for attestation.
+Supported values are SHA256 and SHA512. Default to SHA512 arbitrarily.
+
+SHA512 is generally faster on 64-bit architectures. On a few arm64 CPUs
+I tested SHA256 is much faster, but that's most likely because they only
+support acceleration via FEAT_SHA256 (Armv8.0) and not FEAT_SHA512
+(Armv8.2). Future CPUs supporting RME are likely to also support
+FEAT_SHA512.
+
+Cc: Eric Blake <eblake@redhat.com>
+Cc: Markus Armbruster <armbru@redhat.com>
+Cc: Daniel P. Berrangé <berrange@redhat.com>
+Cc: Eduardo Habkost <eduardo@habkost.net>
+Acked-by: Markus Armbruster <armbru@redhat.com>
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ qapi/qom.json        | 20 +++++++++++++++++++-
+ target/arm/kvm-rme.c | 38 ++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 57 insertions(+), 1 deletion(-)
+
+diff --git a/qapi/qom.json b/qapi/qom.json
+index b85bb467..a980568b 100644
+--- a/qapi/qom.json
++++ b/qapi/qom.json
+@@ -909,6 +909,20 @@
+   'data': { '*cpu-affinity': ['uint16'],
+             '*node-affinity': ['uint16'] } }
+ 
++##
++# @RmeGuestMeasurementAlgorithm:
++#
++# @sha256: Use the SHA256 algorithm
++#
++# @sha512: Use the SHA512 algorithm
++#
++# Algorithm to use for realm measurements
++#
++# Since: 10.0
++##
++{ 'enum': 'RmeGuestMeasurementAlgorithm',
++  'data': ['sha256', 'sha512'] }
++
+ ##
+ # @RmeGuestProperties:
+ #
+@@ -918,10 +932,14 @@
+ #     This optional parameter allows to uniquely identify the VM instance
+ #     during attestation. (default: all-zero)
+ #
++# @measurement-algorithm: Realm measurement algorithm
++#     (default: sha512)
++#
+ # Since: 10.0
+ ##
+ { 'struct': 'RmeGuestProperties',
+-  'data': { '*personalization-value': 'str' } }
++  'data': { '*personalization-value': 'str',
++            '*measurement-algorithm': 'RmeGuestMeasurementAlgorithm' } }
+ 
+ ##
+ # @ObjectType:
+diff --git a/target/arm/kvm-rme.c b/target/arm/kvm-rme.c
+index e8976e47..5e785fa3 100644
+--- a/target/arm/kvm-rme.c
++++ b/target/arm/kvm-rme.c
+@@ -36,6 +36,7 @@ struct RmeGuest {
+ 
+     char *personalization_value_str;
+     uint8_t personalization_value[ARM_RME_CONFIG_RPV_SIZE];
++    RmeGuestMeasurementAlgorithm measurement_algo;
+ 
+     RmeRamRegion init_ram;
+ };
+@@ -59,6 +60,19 @@ static int rme_configure_one(RmeGuest *guest, uint32_t cfg, Error **errp)
+         memcpy(args.rpv, guest->personalization_value, ARM_RME_CONFIG_RPV_SIZE);
+         cfg_str = "personalization value";
+         break;
++    case ARM_RME_CONFIG_HASH_ALGO:
++        switch (guest->measurement_algo) {
++        case RME_GUEST_MEASUREMENT_ALGORITHM_SHA256:
++            args.hash_algo = ARM_RME_CONFIG_MEASUREMENT_ALGO_SHA256;
++            break;
++        case RME_GUEST_MEASUREMENT_ALGORITHM_SHA512:
++            args.hash_algo = ARM_RME_CONFIG_MEASUREMENT_ALGO_SHA512;
++            break;
++        default:
++            g_assert_not_reached();
++        }
++        cfg_str = "hash algorithm";
++        break;
+     default:
+         g_assert_not_reached();
+     }
+@@ -77,6 +91,7 @@ static int rme_configure(Error **errp)
+     size_t option;
+     const uint32_t config_options[] = {
+         ARM_RME_CONFIG_RPV,
++        ARM_RME_CONFIG_HASH_ALGO,
+     };
+ 
+     for (option = 0; option < ARRAY_SIZE(config_options); option++) {
+@@ -248,12 +263,34 @@ static void rme_set_rpv(Object *obj, const char *value, Error **errp)
+     guest->personalization_value_str = g_strdup(value);
+ }
+ 
++static int rme_get_measurement_algo(Object *obj, Error **errp)
++{
++    RmeGuest *guest = RME_GUEST(obj);
++
++    return guest->measurement_algo;
++}
++
++static void rme_set_measurement_algo(Object *obj, int algo, Error **errp)
++{
++    RmeGuest *guest = RME_GUEST(obj);
++
++    guest->measurement_algo = algo;
++}
++
+ static void rme_guest_class_init(ObjectClass *oc, void *data)
+ {
+     object_class_property_add_str(oc, "personalization-value", rme_get_rpv,
+                                   rme_set_rpv);
+     object_class_property_set_description(oc, "personalization-value",
+             "Realm personalization value (64 bytes encodede in base64)");
++
++    object_class_property_add_enum(oc, "measurement-algorithm",
++                                   "RmeGuestMeasurementAlgorithm",
++                                   &RmeGuestMeasurementAlgorithm_lookup,
++                                   rme_get_measurement_algo,
++                                   rme_set_measurement_algo);
++    object_class_property_set_description(oc, "measurement-algorithm",
++            "Realm measurement algorithm ('sha256', 'sha512')");
+ }
+ 
+ static void rme_guest_init(Object *obj)
+@@ -263,6 +300,7 @@ static void rme_guest_init(Object *obj)
+         exit(1);
+     }
+     rme_guest = RME_GUEST(obj);
++    rme_guest->measurement_algo = RME_GUEST_MEASUREMENT_ALGORITHM_SHA512;
+ }
+ 
+ static void rme_guest_finalize(Object *obj)
+-- 
+2.51.0
+

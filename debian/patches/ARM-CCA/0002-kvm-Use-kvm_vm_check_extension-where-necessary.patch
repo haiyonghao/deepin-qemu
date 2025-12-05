@@ -1,0 +1,86 @@
+From be35a089c612353c06ef5b99ddc425d5bda1e7c3 Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Wed, 4 Dec 2024 15:34:28 +0000
+Subject: [PATCH 02/29] kvm: Use kvm_vm_check_extension() where necessary
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/97b19c96743303418578785a230019b8b26b0131
+
+The Arm KVM code can return different values from KVM_CHECK_EXTENSION
+depending on the VM type. Use kvm_vm_check_extension() where necessary
+to ensure we get the right response from KVM.
+
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Conflicts:
+      target/arm/kvm.c
+Signed-off-by: frankyj915 <yangjieyj.yang@huawei.com>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ accel/kvm/kvm-all.c | 6 +++---
+ target/arm/kvm64.c  | 8 ++++----
+ 2 files changed, 7 insertions(+), 7 deletions(-)
+
+diff --git a/accel/kvm/kvm-all.c b/accel/kvm/kvm-all.c
+index 6db60854..22830726 100644
+--- a/accel/kvm/kvm-all.c
++++ b/accel/kvm/kvm-all.c
+@@ -2323,13 +2323,13 @@ static int kvm_recommended_vcpus(KVMState *s)
+ 
+ static int kvm_max_vcpus(KVMState *s)
+ {
+-    int ret = kvm_check_extension(s, KVM_CAP_MAX_VCPUS);
++    int ret = kvm_vm_check_extension(s, KVM_CAP_MAX_VCPUS);
+     return (ret) ? ret : kvm_recommended_vcpus(s);
+ }
+ 
+ static int kvm_max_vcpu_id(KVMState *s)
+ {
+-    int ret = kvm_check_extension(s, KVM_CAP_MAX_VCPU_ID);
++    int ret = kvm_vm_check_extension(s, KVM_CAP_MAX_VCPU_ID);
+     return (ret) ? ret : kvm_max_vcpus(s);
+ }
+ 
+@@ -2575,7 +2575,7 @@ static int kvm_init(MachineState *ms)
+ 
+ #ifdef KVM_CAP_SET_GUEST_DEBUG
+     kvm_has_guest_debug =
+-        (kvm_check_extension(s, KVM_CAP_SET_GUEST_DEBUG) > 0);
++        (kvm_vm_check_extension(s, KVM_CAP_SET_GUEST_DEBUG) > 0);
+ #endif
+ 
+     kvm_sstep_flags = 0;
+diff --git a/target/arm/kvm64.c b/target/arm/kvm64.c
+index 3c175c93..3b6ca6d8 100644
+--- a/target/arm/kvm64.c
++++ b/target/arm/kvm64.c
+@@ -39,11 +39,11 @@ void kvm_arm_init_debug(KVMState *s)
+     have_guest_debug = kvm_check_extension(s,
+                                            KVM_CAP_SET_GUEST_DEBUG);
+ 
+-    max_hw_wps = kvm_check_extension(s, KVM_CAP_GUEST_DEBUG_HW_WPS);
++    max_hw_wps = kvm_vm_check_extension(s, KVM_CAP_GUEST_DEBUG_HW_WPS);
+     hw_watchpoints = g_array_sized_new(true, true,
+                                        sizeof(HWWatchpoint), max_hw_wps);
+ 
+-    max_hw_bps = kvm_check_extension(s, KVM_CAP_GUEST_DEBUG_HW_BPS);
++    max_hw_bps = kvm_vm_check_extension(s, KVM_CAP_GUEST_DEBUG_HW_BPS);
+     hw_breakpoints = g_array_sized_new(true, true,
+                                        sizeof(HWBreakpoint), max_hw_bps);
+     return;
+@@ -472,12 +472,12 @@ bool kvm_arm_aarch32_supported(void)
+ 
+ bool kvm_arm_sve_supported(void)
+ {
+-    return kvm_check_extension(kvm_state, KVM_CAP_ARM_SVE);
++    return kvm_vm_check_extension(kvm_state, KVM_CAP_ARM_SVE);
+ }
+ 
+ bool kvm_arm_steal_time_supported(void)
+ {
+-    return kvm_check_extension(kvm_state, KVM_CAP_STEAL_TIME);
++    return kvm_vm_check_extension(kvm_state, KVM_CAP_STEAL_TIME);
+ }
+ 
+ QEMU_BUILD_BUG_ON(KVM_ARM64_SVE_VQ_MIN != 1);
+-- 
+2.51.0
+

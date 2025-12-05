@@ -1,0 +1,41 @@
+From df3560f2535624224147e9dc219a09569d4ac45e Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Wed, 21 Feb 2024 13:58:14 +0000
+Subject: [PATCH 24/29] hw/arm/boot: Load DTB as is for confidential VMs
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/2c85282f4b10b301880b5067834ef83ad368d50a
+
+For confidential VMs it may be necessary to measure the DTB, to ensure a
+malicious host does not insert harmful information in there. In case an
+external tool can generated and measured the DTB, load it as is without
+patching it.
+
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ hw/arm/boot.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/hw/arm/boot.c b/hw/arm/boot.c
+index 276b6c62..f0216500 100644
+--- a/hw/arm/boot.c
++++ b/hw/arm/boot.c
+@@ -523,7 +523,14 @@ int arm_load_dtb(hwaddr addr, const struct arm_boot_info *binfo,
+     char **node_path;
+     Error *err = NULL;
+ 
+-    if (binfo->dtb_filename) {
++    if (binfo->dtb_filename && binfo->confidential) {
++        /*
++         * If the user is providing a DTB for a confidential VM, it is already
++         * tailored to this configuration and measured. Load it as is, without
++         * any modification.
++         */
++        return rom_add_file_fixed_as(binfo->dtb_filename, addr, -1, as);
++    } else if (binfo->dtb_filename) {
+         char *filename;
+         filename = qemu_find_file(QEMU_FILE_TYPE_BIOS, binfo->dtb_filename);
+         if (!filename) {
+-- 
+2.51.0
+

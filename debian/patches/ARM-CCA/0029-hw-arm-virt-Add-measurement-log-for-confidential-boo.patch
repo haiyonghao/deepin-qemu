@@ -1,0 +1,186 @@
+From 35ba8fdf0309543b22c3883a77141a7e51fe1507 Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Thu, 7 Nov 2024 17:42:02 +0000
+Subject: [PATCH 29/29] hw/arm/virt: Add measurement log for confidential boot
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/7905fe583633f1246a50324c77c39026136fac29
+
+Create a measurement log describing operations performed by QEMU to
+initialize the guest, and load it into guest memory above the DTB.
+
+Cc: Stefan Berger <stefanb@linux.vnet.ibm.com>
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Conflicts:
+      hw/arm/virt.c
+      include/hw/arm/virt.h
+Signed-off-by: frankyj915 <yangjieyj.yang@huawei.com>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ hw/arm/boot.c         | 46 +++++++++++++++++++++++++++++++++++++++++++
+ hw/arm/virt.c         | 22 +++++++++++++++++++++
+ include/hw/arm/boot.h |  4 ++++
+ include/hw/arm/virt.h |  1 +
+ 4 files changed, 73 insertions(+)
+
+diff --git a/hw/arm/boot.c b/hw/arm/boot.c
+index 7a021a9a..b4fa380c 100644
+--- a/hw/arm/boot.c
++++ b/hw/arm/boot.c
+@@ -665,6 +665,24 @@ int arm_load_dtb(hwaddr addr, const struct arm_boot_info *binfo,
+ 
+     fdt_add_psci_node(fdt);
+ 
++    /* Add a reserved-memory node for the event log */
++    if (binfo->log_size) {
++        char *nodename;
++
++        qemu_fdt_add_subnode(fdt, "/reserved-memory");
++        qemu_fdt_setprop_cell(fdt, "/reserved-memory", "#address-cells", 0x2);
++        qemu_fdt_setprop_cell(fdt, "/reserved-memory", "#size-cells", 0x2);
++        qemu_fdt_setprop(fdt, "/reserved-memory", "ranges", NULL, 0);
++
++        nodename = g_strdup_printf("/reserved-memory/event-log@%" PRIx64,
++                                   binfo->log_paddr);
++        qemu_fdt_add_subnode(fdt, nodename);
++        qemu_fdt_setprop_string(fdt, nodename, "compatible", "cc-event-log");
++        qemu_fdt_setprop_sized_cells(fdt, nodename, "reg", 2, binfo->log_paddr,
++                                           2, binfo->log_size);
++        g_free(nodename);
++    }
++
+     if (binfo->modify_dtb) {
+         binfo->modify_dtb(binfo, fdt);
+     }
+@@ -937,6 +955,30 @@ static uint64_t load_aarch64_image(const char *filename, hwaddr mem_base,
+     return kernel_size;
+ }
+ 
++static void add_event_log(struct arm_boot_info *info)
++{
++    if (!info->log_size) {
++        return;
++    }
++
++    if (!info->dtb_limit) {
++        int dtb_size = 0;
++
++        if (!info->get_dtb(info, &dtb_size) || dtb_size == 0) {
++            error_report("Board does not have a DTB");
++            exit(1);
++        }
++        info->dtb_limit = info->dtb_start + dtb_size;
++    }
++
++    info->log_paddr = info->dtb_limit;
++    if (info->log_paddr + info->log_size >
++        info->loader_start + info->ram_size) {
++        error_report("Not enough space for measurement log and DTB");
++        exit(1);
++    }
++}
++
+ static void arm_setup_direct_kernel_boot(ARMCPU *cpu,
+                                          struct arm_boot_info *info)
+ {
+@@ -984,6 +1026,7 @@ static void arm_setup_direct_kernel_boot(ARMCPU *cpu,
+             }
+             info->dtb_start = info->loader_start;
+             info->dtb_limit = image_low_addr;
++            add_event_log(info);
+         }
+     }
+     entry = elf_entry;
+@@ -1122,6 +1165,8 @@ static void arm_setup_direct_kernel_boot(ARMCPU *cpu,
+                 error_report("Not enough space for DTB after kernel/initrd");
+                 exit(1);
+             }
++            add_event_log(info);
++
+             fixupcontext[FIXUP_ARGPTR_LO] = info->dtb_start;
+             fixupcontext[FIXUP_ARGPTR_HI] = info->dtb_start >> 32;
+         } else {
+@@ -1183,6 +1228,7 @@ static void arm_setup_confidential_firmware_boot(ARMCPU *cpu,
+         error_report("could not load firmware '%s'", firmware_filename);
+         exit(1);
+     }
++    add_event_log(info);
+ }
+ 
+ static void arm_setup_firmware_boot(ARMCPU *cpu, struct arm_boot_info *info,
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index c20e8ce1..a260ab98 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -1729,6 +1729,11 @@ void virt_machine_done(Notifier *notifier, void *data)
+         exit(1);
+     }
+ 
++    if (vms->event_log) {
++        object_property_set_uint(vms->event_log, "load-addr",
++                                 vms->bootinfo.log_paddr, &error_fatal);
++    }
++
+     fw_cfg_add_extra_pci_roots(vms->bus, vms->fw_cfg);
+ 
+     virt_acpi_setup(vms);
+@@ -2069,6 +2074,21 @@ static void virt_cpu_post_init(VirtMachineState *vms, MemoryRegion *sysmem)
+     }
+ }
+ 
++static void create_measurement_log(VirtMachineState *vms)
++{
++    Error *err = NULL;
++
++    vms->event_log = kvm_arm_rme_get_measurement_log();
++    if (vms->event_log == NULL) {
++        return;
++    }
++    vms->bootinfo.log_size = object_property_get_uint(vms->event_log,
++                                                      "max-size", &err);
++    if (err != NULL) {
++        error_report_err(err);
++    }
++}
++
+ static void machvirt_init(MachineState *machine)
+ {
+     VirtMachineState *vms = VIRT_MACHINE(machine);
+@@ -2374,6 +2394,8 @@ static void machvirt_init(MachineState *machine)
+                                vms->fw_cfg, OBJECT(vms));
+     }
+ 
++    create_measurement_log(vms);
++    
+     vms->bootinfo.ram_size = machine->ram_size;
+     vms->bootinfo.board_id = -1;
+     vms->bootinfo.loader_start = vms->memmap[VIRT_MEM].base;
+diff --git a/include/hw/arm/boot.h b/include/hw/arm/boot.h
+index 5fcbaa26..65d9cdf4 100644
+--- a/include/hw/arm/boot.h
++++ b/include/hw/arm/boot.h
+@@ -147,6 +147,10 @@ struct arm_boot_info {
+      * Confidential guest boot loads everything into RAM so it can be measured.
+      */
+     bool confidential;
++
++    /* measurement log location in guest memory */
++    hwaddr log_paddr;
++    size_t log_size;
+ };
+ 
+ /**
+diff --git a/include/hw/arm/virt.h b/include/hw/arm/virt.h
+index 65ed1c11..a039412a 100644
+--- a/include/hw/arm/virt.h
++++ b/include/hw/arm/virt.h
+@@ -173,6 +173,7 @@ struct VirtMachineState {
+     PCIBus *bus;
+     char *oem_id;
+     char *oem_table_id;
++    Object *event_log;
+ };
+ 
+ #define VIRT_ECAM_ID(high) (high ? VIRT_HIGH_PCIE_ECAM : VIRT_PCIE_ECAM)
+-- 
+2.51.0
+

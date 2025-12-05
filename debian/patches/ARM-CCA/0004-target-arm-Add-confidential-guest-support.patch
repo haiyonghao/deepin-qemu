@@ -1,0 +1,124 @@
+From 8be917cef4f41052e73f70914fa28ef451e7e9fc Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Thu, 16 Jun 2022 18:24:55 +0100
+Subject: [PATCH 04/29] target/arm: Add confidential guest support
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/6353278a78f3942ff1b576aab77d79d926e8f9f0
+
+Add a new RmeGuest object, inheriting from ConfidentialGuestSupport, to
+support the Arm Realm Management Extension (RME). It is instantiated by
+passing on the command-line:
+
+  -M virt,confidential-guest-support=<id>
+  -object rme-guest,id=<id>[,options...]
+
+This is only the skeleton. Support will be added in following patches.
+
+Cc: Eric Blake <eblake@redhat.com>
+Cc: Markus Armbruster <armbru@redhat.com>
+Cc: Daniel P. Berrangé <berrange@redhat.com>
+Cc: Eduardo Habkost <eduardo@habkost.net>
+Acked-by: Markus Armbruster <armbru@redhat.com>
+Reviewed-by: Philippe Mathieu-Daudé <philmd@linaro.org>
+Reviewed-by: Richard Henderson <richard.henderson@linaro.org>
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Conflicts:
+      target/arm/meson.build
+Signed-off-by: frankyj915 <yangjieyj.yang@huawei.com>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ docs/system/confidential-guest-support.rst |  1 +
+ qapi/qom.json                              |  1 +
+ target/arm/kvm-rme.c                       | 40 ++++++++++++++++++++++
+ target/arm/meson.build                     |  2 +-
+ 4 files changed, 43 insertions(+), 1 deletion(-)
+ create mode 100644 target/arm/kvm-rme.c
+
+diff --git a/docs/system/confidential-guest-support.rst b/docs/system/confidential-guest-support.rst
+index 0c490dbd..acf46d88 100644
+--- a/docs/system/confidential-guest-support.rst
++++ b/docs/system/confidential-guest-support.rst
+@@ -40,5 +40,6 @@ Currently supported confidential guest mechanisms are:
+ * AMD Secure Encrypted Virtualization (SEV) (see :doc:`i386/amd-memory-encryption`)
+ * POWER Protected Execution Facility (PEF) (see :ref:`power-papr-protected-execution-facility-pef`)
+ * s390x Protected Virtualization (PV) (see :doc:`s390x/protvirt`)
++* Arm Realm Management Extension (RME)
+ 
+ Other mechanisms may be supported in future.
+diff --git a/qapi/qom.json b/qapi/qom.json
+index 477f4dd9..cdb44375 100644
+--- a/qapi/qom.json
++++ b/qapi/qom.json
+@@ -956,6 +956,7 @@
+     { 'name': 'pr-manager-helper',
+       'if': 'CONFIG_LINUX' },
+     'qtest',
++    'rme-guest',
+     'rng-builtin',
+     'rng-egd',
+     { 'name': 'rng-random',
+diff --git a/target/arm/kvm-rme.c b/target/arm/kvm-rme.c
+new file mode 100644
+index 00000000..1de65f2b
+--- /dev/null
++++ b/target/arm/kvm-rme.c
+@@ -0,0 +1,40 @@
++/*
++ * QEMU Arm RME support
++ *
++ * Copyright Linaro 2024
++ */
++
++#include "qemu/osdep.h"
++
++#include "hw/boards.h"
++#include "hw/core/cpu.h"
++#include "kvm_arm.h"
++#include "migration/blocker.h"
++#include "qapi/error.h"
++#include "qom/object_interfaces.h"
++#include "exec/confidential-guest-support.h"
++#include "sysemu/kvm.h"
++#include "sysemu/runstate.h"
++
++#define TYPE_RME_GUEST "rme-guest"
++OBJECT_DECLARE_SIMPLE_TYPE(RmeGuest, RME_GUEST)
++
++struct RmeGuest {
++    ConfidentialGuestSupport parent_obj;
++};
++
++OBJECT_DEFINE_SIMPLE_TYPE_WITH_INTERFACES(RmeGuest, rme_guest, RME_GUEST,
++                                          CONFIDENTIAL_GUEST_SUPPORT,
++                                          { TYPE_USER_CREATABLE }, { })
++
++static void rme_guest_class_init(ObjectClass *oc, void *data)
++{
++}
++
++static void rme_guest_init(Object *obj)
++{
++}
++
++static void rme_guest_finalize(Object *obj)
++{
++}
+diff --git a/target/arm/meson.build b/target/arm/meson.build
+index 5d04a8e9..a0a8701e 100644
+--- a/target/arm/meson.build
++++ b/target/arm/meson.build
+@@ -8,7 +8,7 @@ arm_ss.add(files(
+ ))
+ arm_ss.add(zlib)
+ 
+-arm_ss.add(when: 'CONFIG_KVM', if_true: files('hyp_gdbstub.c', 'kvm.c', 'kvm64.c'), if_false: files('kvm-stub.c'))
++arm_ss.add(when: 'CONFIG_KVM', if_true: files('hyp_gdbstub.c', 'kvm.c', 'kvm64.c', 'kvm-rme.c'), if_false: files('kvm-stub.c'))
+ arm_ss.add(when: 'CONFIG_HVF', if_true: files('hyp_gdbstub.c'))
+ 
+ arm_ss.add(when: 'TARGET_AARCH64', if_true: files(
+-- 
+2.51.0
+

@@ -1,0 +1,66 @@
+From 12fae50d03ea7a8951571acff3a3216433c136e7 Mon Sep 17 00:00:00 2001
+From: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Date: Mon, 6 Feb 2023 16:56:39 +0000
+Subject: [PATCH 20/29] hw/arm/virt: Reserve one bit of guest-physical address
+ for RME
+
+Reference:https://git.codelinaro.org/linaro/dcap/qemu/-/commit/ebffee632eb86b3423ac08a264ea0edc5cf97ead
+
+When RME is enabled, the upper GPA bit is used to distinguish protected
+from unprotected addresses. Reserve it when setting up the guest memory
+map.
+
+Signed-off-by: Jean-Philippe Brucker <jean-philippe@linaro.org>
+Signed-off-by: houmingyong <houmingyong@huawei.com>
+---
+ hw/arm/virt.c | 18 ++++++++++++++----
+ 1 file changed, 14 insertions(+), 4 deletions(-)
+
+diff --git a/hw/arm/virt.c b/hw/arm/virt.c
+index 7d6618d4..0367bae6 100644
+--- a/hw/arm/virt.c
++++ b/hw/arm/virt.c
+@@ -2923,14 +2923,24 @@ static int virt_kvm_type(MachineState *ms, const char *type_str)
+     VirtMachineState *vms = VIRT_MACHINE(ms);
+     int rme_vm_type = kvm_arm_rme_vm_type(ms);
+     int max_vm_pa_size, requested_pa_size;
++    int rme_reserve_bit = 0;
+     bool fixed_ipa;
+ 
+-    max_vm_pa_size = kvm_arm_get_max_vm_ipa_size(ms, &fixed_ipa);
++    if (rme_vm_type) {
++        /*
++         * With RME, the upper GPA bit differentiates Realm from NS memory.
++         * Reserve the upper bit to ensure that highmem devices will fit.
++         */
++        rme_reserve_bit = 1;
++    }
++
++    max_vm_pa_size = kvm_arm_get_max_vm_ipa_size(ms, &fixed_ipa) -
++                     rme_reserve_bit;
+ 
+     /* we freeze the memory map to compute the highest gpa */
+     virt_set_memmap(vms, max_vm_pa_size);
+ 
+-    requested_pa_size = 64 - clz64(vms->highest_gpa);
++    requested_pa_size = 64 - clz64(vms->highest_gpa) + rme_reserve_bit;
+ 
+     /*
+      * KVM requires the IPA size to be at least 32 bits.
+@@ -2939,11 +2949,11 @@ static int virt_kvm_type(MachineState *ms, const char *type_str)
+         requested_pa_size = 32;
+     }
+ 
+-    if (requested_pa_size > max_vm_pa_size) {
++    if (requested_pa_size > max_vm_pa_size + rme_reserve_bit) {
+         error_report("-m and ,maxmem option values "
+                      "require an IPA range (%d bits) larger than "
+                      "the one supported by the host (%d bits)",
+-                     requested_pa_size, max_vm_pa_size);
++                     requested_pa_size, max_vm_pa_size + rme_reserve_bit);
+         return -1;
+     }
+     /*
+-- 
+2.51.0
+
